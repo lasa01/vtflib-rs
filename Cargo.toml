@@ -1,0 +1,17 @@
+[package]
+name = "vtflib"
+version = "0.1.0"
+authors = ["Lassi Säike"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[features]
+static = ["vtflib-sys/static"]
+
+[dependencies]
+bitflags = "1.2.1"
+vtflib-sys = "0.1.0"
+
+[dev-dependencies]
+serial_test = "0.5.1"
