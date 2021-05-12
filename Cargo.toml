@@ -1,6 +1,12 @@
 [package]
 name = "vtflib"
+description = "Safe wrapper for VTFLib."
 version = "0.1.0"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/lasa01/vtflib-rs/"
+readme = "README.md"
+keywords = ["vtflib", "vtf"]
+categories = ["api-bindings", "multimedia::images"]
 authors = ["Lassi Säike"]
 edition = "2018"
 

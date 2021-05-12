@@ -1,4 +1,4 @@
-#![deny(clippy::all, clippy::pedantic)]
+#![deny(clippy::all, clippy::pedantic, clippy::cargo)]
 #![allow(clippy::unused_self)]
 
 use std::{
@@ -17,10 +17,18 @@ use vtflib_sys as ffi;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Error {
+    /// Provided image data buffer was too short to contain an image
+    /// with the specified width, height and format.
     InvalidLength,
+    /// Provided parameters were invalid for the bound image.
+    /// Eg. provided `frame`, `face` or `slice` didn't exist.
     InvalidParameters,
+    /// The bound image had an unsupported format.
     InvalidFormat,
+    /// Provided buffer was too long to fit into `u32`.
+    /// VTFLib does not have 64-bit support.
     LengthOverflow,
+    /// An error that was returned by VTFLib.
     VtfLib(String),
 }
 
@@ -80,6 +88,7 @@ macro_rules! ffi_enum {
         $(#[$meta:meta]) *
         $vis:vis enum $name:ident {
             $(
+                $(#[$tagmeta:meta]) *
                 $tag:ident = $value:path
             ),+
         }
@@ -88,6 +97,7 @@ macro_rules! ffi_enum {
         #[repr($repr)]
         $vis enum $name {
             $(
+                $(#[$tagmeta] )*
                 $tag = $value
             ),*
         }
@@ -164,10 +174,12 @@ fn uninit_decrement() {
         1 => unsafe {
             ffi::vlShutdown();
         },
-        _ => {}
+        2 => {}
+        _ => panic!("unexpected uninit counter value"),
     }
 }
 
+/// Integer library configuration options.
 #[repr(i32)]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum IntegerOption {
@@ -181,6 +193,7 @@ pub enum IntegerOption {
     VmtParseMode = ffi::tagVTFLibOption_VTFLIB_VMT_PARSE_MODE,
 }
 
+/// Floating point library configuration options.
 #[repr(i32)]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum FloatOption {
@@ -197,7 +210,9 @@ pub enum FloatOption {
     XSharpenThreshold = ffi::tagVTFLibOption_VTFLIB_XSHARPEN_THRESHOLD,
 }
 
-// *const () makes the struct !Send + !Sync, VTFLib is not thread safe
+/// Represents initialized library.
+/// Only one of these can exist at any given time.
+/// This struct is `!Send + !Sync` since the library is not thread-safe.
 #[must_use]
 #[derive(Debug)]
 pub struct VtfLib(PhantomData<*const ()>);
@@ -207,7 +222,7 @@ impl VtfLib {
     /// Returns [`None`] if it's already initialized.
     /// Uninitialization happens when both returned structs are dropped.
     #[must_use]
-    pub fn new() -> Option<(Self, VtfGuard)> {
+    pub fn initialize() -> Option<(Self, VtfGuard)> {
         UNINIT_COUNTER
             .compare_exchange(0, 2, Ordering::Acquire, Ordering::Acquire)
             .ok()?;
@@ -217,14 +232,16 @@ impl VtfLib {
                 return None;
             }
         }
-        Some((Self(PhantomData), VtfGuard))
+        Some((Self(PhantomData), VtfGuard(PhantomData)))
     }
 
+    /// Get the library's version number.
     #[must_use]
     pub fn get_version() -> u32 {
         unsafe { ffi::vlGetVersion() }
     }
 
+    /// Get the library's version number string.
     #[must_use]
     #[allow(clippy::missing_panics_doc)]
     pub fn get_version_string() -> &'static str {
@@ -233,28 +250,35 @@ impl VtfLib {
             .unwrap()
     }
 
+    /// Get the value of an integer configuration option.
     #[must_use]
     pub fn get_integer(&self, option: IntegerOption) -> i32 {
         unsafe { ffi::vlGetInteger(option as i32) }
     }
 
+    /// Set the value of an integer configuration option.
     pub fn set_integer(&self, option: IntegerOption, value: i32) {
         unsafe {
             ffi::vlSetInteger(option as i32, value);
         }
     }
 
+    /// Get the value of a floating point configuration option.
     #[must_use]
     pub fn get_float(&self, option: FloatOption) -> f32 {
         unsafe { ffi::vlGetFloat(option as i32) }
     }
 
+    /// Set the value of a floating point configuration option.
     pub fn set_float(&self, option: FloatOption, value: f32) {
         unsafe {
             ffi::vlSetFloat(option as i32, value);
         }
     }
 
+    /// Create a vtf file.
+    /// The [`VtfFile`] needs to be bound before it can be worked on.
+    ///
     /// # Panics
     ///
     /// Panics if the vtf creation fails. This should not happen.
@@ -280,9 +304,11 @@ impl Drop for VtfLib {
     }
 }
 
-/// Enforces that only one [`VtfFile`] is bound at a time
+/// Enforces that only one [`VtfFile`] is bound at a time.
+/// Only one of these can exist at any given time.
+/// This struct is `!Send + !Sync` since the library is not thread-safe.
 #[derive(Debug)]
-pub struct VtfGuard;
+pub struct VtfGuard(PhantomData<*const ()>);
 
 impl Drop for VtfGuard {
     fn drop(&mut self) {
@@ -292,37 +318,68 @@ impl Drop for VtfGuard {
 
 ffi_enum! {
     #[repr(i32)]
+    #[doc = "VTFLib's supported image formats."]
     #[derive(Debug, Clone, Copy, PartialEq)]
     pub enum ImageFormat {
+        #[doc = "Red, green, blue, alpha - 32 bpp"]
         Rgba8888 = ffi::tagVTFImageFormat_IMAGE_FORMAT_RGBA8888,
+        #[doc = "Alpha, blue, green, red - 32 bpp"]
         Agbr8888 = ffi::tagVTFImageFormat_IMAGE_FORMAT_ABGR8888,
+        #[doc = "Red, green, blue - 24 bpp"]
         Rgb888 = ffi::tagVTFImageFormat_IMAGE_FORMAT_RGB888,
+        #[doc = "Blue, green, red - 24 bpp"]
         Bgr888 = ffi::tagVTFImageFormat_IMAGE_FORMAT_BGR888,
+        #[doc = "Red, green, blue - 16 bpp"]
         Rgb565 = ffi::tagVTFImageFormat_IMAGE_FORMAT_RGB565,
+        #[doc = "Luminance - 8 bpp"]
         I8 = ffi::tagVTFImageFormat_IMAGE_FORMAT_I8,
+        #[doc = "Luminance, alpha - 8 bpp"]
         Ia88 = ffi::tagVTFImageFormat_IMAGE_FORMAT_IA88,
+        #[doc = "Paletted, 8 bpp"]
         P8 = ffi::tagVTFImageFormat_IMAGE_FORMAT_P8,
+        #[doc = "Alpha, 8 bpp"]
         A8 = ffi::tagVTFImageFormat_IMAGE_FORMAT_A8,
+        #[doc = "Red, green, blue, bluescreen alpha - 24 bpp"]
         Rgb888Bluescreen = ffi::tagVTFImageFormat_IMAGE_FORMAT_RGB888_BLUESCREEN,
+        #[doc = "Blue, green, red, bluescreen alpha - 24 bpp"]
         Bgr888Bluescreen = ffi::tagVTFImageFormat_IMAGE_FORMAT_BGR888_BLUESCREEN,
+        #[doc = "Alpha, red, green, blue - 32 bpp"]
         Argb8888 = ffi::tagVTFImageFormat_IMAGE_FORMAT_ARGB8888,
+        #[doc = "Blue, green, red, alpha - 32 bpp"]
         Bgra8888 = ffi::tagVTFImageFormat_IMAGE_FORMAT_BGRA8888,
+        #[doc = "DXT1 compressed - 4 bpp"]
         Dxt1 = ffi::tagVTFImageFormat_IMAGE_FORMAT_DXT1,
+        #[doc = "DXT3 compressed - 8 bpp"]
         Dxt3 = ffi::tagVTFImageFormat_IMAGE_FORMAT_DXT3,
+        #[doc = "DXT5 compressed - 8 bpp"]
         Dxt5 = ffi::tagVTFImageFormat_IMAGE_FORMAT_DXT5,
+        #[doc = "Blue, green, red, unused - 32 bpp"]
         Bgrx8888 = ffi::tagVTFImageFormat_IMAGE_FORMAT_BGRX8888,
+        #[doc = "Blue, green, red - 16 bpp"]
         Bgr565 = ffi::tagVTFImageFormat_IMAGE_FORMAT_BGR565,
+        #[doc = "Blue, green, red, unused - 16 bpp"]
         Bgrx5551 = ffi::tagVTFImageFormat_IMAGE_FORMAT_BGRX5551,
+        #[doc = "Blue, green, red, alpha - 16 bpp"]
         Bgra4444 = ffi::tagVTFImageFormat_IMAGE_FORMAT_BGRA4444,
+        #[doc = "DXT1 compressed, 1-bit alpha - 4 bpp"]
         Dxt1OneBitAlpha = ffi::tagVTFImageFormat_IMAGE_FORMAT_DXT1_ONEBITALPHA,
+        #[doc = "Blue, green, red, alpha - 16 bpp"]
         Bgra5551 = ffi::tagVTFImageFormat_IMAGE_FORMAT_BGRA5551,
+        #[doc = "2-channel format for DuDv/normal maps - 16 bpp"]
         Uv88 = ffi::tagVTFImageFormat_IMAGE_FORMAT_UV88,
+        #[doc = "4-channel format for DuDv/normal maps - 32 bpp"]
         Uvwq8888 = ffi::tagVTFImageFormat_IMAGE_FORMAT_UVWQ8888,
+        #[doc = "Red, green, blue, alpha - 64 bpp"]
         Rgba16161616F = ffi::tagVTFImageFormat_IMAGE_FORMAT_RGBA16161616F,
+        #[doc = "Red, green, blue, alpha signed with mantissa - 64 bpp"]
         Rgba16161616 = ffi::tagVTFImageFormat_IMAGE_FORMAT_RGBA16161616,
+        #[doc = "4-channel format for DuDv/normal maps - 32 bpp"]
         Uvlx8888 = ffi::tagVTFImageFormat_IMAGE_FORMAT_UVLX8888,
+        #[doc = "Luminance - 32 bpp"]
         R32F = ffi::tagVTFImageFormat_IMAGE_FORMAT_R32F,
+        #[doc = "Red, green, blue - 96 bpp"]
         Rgb323232F = ffi::tagVTFImageFormat_IMAGE_FORMAT_RGB323232F,
+        #[doc = "Red, green, blue, alpha - 128 bpp"]
         Rgba32323232F = ffi::tagVTFImageFormat_IMAGE_FORMAT_RGBA32323232F,
         NvDst16 = ffi::tagVTFImageFormat_IMAGE_FORMAT_NV_DST16,
         NvDst24 = ffi::tagVTFImageFormat_IMAGE_FORMAT_NV_DST24,
@@ -337,6 +394,8 @@ ffi_enum! {
 }
 
 impl ImageFormat {
+    /// Get information about the image format.
+    /// Returns `None` if the image format is unknown.
     #[must_use]
     pub fn info(self) -> Option<ImageFormatInfo> {
         let info = unsafe {
@@ -350,37 +409,62 @@ impl ImageFormat {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+/// Information about an image format.
+#[derive(Debug, Clone)]
 pub struct ImageFormatInfo {
     name: &'static str,
-    bits_per_pixel: u32,
-    bytes_per_pixel: u32,
-    red_bits_per_pixel: u32,
-    green_bits_per_pixel: u32,
-    blue_bits_per_pixel: u32,
-    alpha_bits_per_pixel: u32,
-    compressed: bool,
-    supported: bool,
+    info: ffi::tagSVTFImageFormatInfo,
 }
 
 impl ImageFormatInfo {
-    fn new(format: ffi::tagSVTFImageFormatInfo) -> Self {
-        let name = unsafe { CStr::from_ptr(format.lpName).to_str().unwrap() };
-        Self {
-            name,
-            bits_per_pixel: format.uiBitsPerPixel,
-            bytes_per_pixel: format.uiBytesPerPixel,
-            red_bits_per_pixel: format.uiRedBitsPerPixel,
-            green_bits_per_pixel: format.uiGreenBitsPerPixel,
-            blue_bits_per_pixel: format.uiBlueBitsPerPixel,
-            alpha_bits_per_pixel: format.uiAlphaBitsPerPixel,
-            compressed: format.bIsCompressed == ffi::vlTrue,
-            supported: format.bIsSupported == ffi::vlTrue,
-        }
+    fn new(info: ffi::tagSVTFImageFormatInfo) -> Self {
+        let name = unsafe { CStr::from_ptr(info.lpName).to_str().unwrap() };
+        Self { name, info }
+    }
+
+    #[must_use]
+    pub fn name(&self) -> &'static str {
+        self.name
+    }
+
+    #[must_use]
+    pub fn bits_per_pixel(&self) -> u32 {
+        self.info.uiBitsPerPixel
+    }
+
+    #[must_use]
+    pub fn bytes_per_pixel(&self) -> u32 {
+        self.info.uiBytesPerPixel
+    }
+
+    #[must_use]
+    pub fn red_bits_per_pixel(&self) -> u32 {
+        self.info.uiRedBitsPerPixel
+    }
+
+    #[must_use]
+    pub fn green_bits_per_pixel(&self) -> u32 {
+        self.info.uiGreenBitsPerPixel
+    }
+
+    #[must_use]
+    pub fn blue_bits_per_pixel(&self) -> u32 {
+        self.info.uiBlueBitsPerPixel
+    }
+
+    #[must_use]
+    pub fn compressed(&self) -> bool {
+        self.info.bIsCompressed == ffi::vlTrue
+    }
+
+    #[must_use]
+    pub fn supported(&self) -> bool {
+        self.info.bIsSupported == ffi::vlTrue
     }
 }
 
 bitflags! {
+    #[doc = "VTF image header flags"]
     pub struct ImageFlags: u32 {
         const POINT_SAMPLE = ffi::tagVTFImageFlag_TEXTUREFLAGS_POINTSAMPLE as u32;
         const TRILINEAR = ffi::tagVTFImageFlag_TEXTUREFLAGS_TRILINEAR as u32;
@@ -425,6 +509,19 @@ bitflags! {
     }
 }
 
+/// VTF image cubemap face indices
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum CubeMapFace {
+    Right = ffi::tagVTFCubeMapFace_CUBEMAP_FACE_RIGHT as u32,
+    Left = ffi::tagVTFCubeMapFace_CUBEMAP_FACE_LEFT as u32,
+    Back = ffi::tagVTFCubeMapFace_CUBEMAP_FACE_BACK as u32,
+    Front = ffi::tagVTFCubeMapFace_CUBEMAP_FACE_FRONT as u32,
+    Up = ffi::tagVTFCubeMapFace_CUBEMAP_FACE_UP as u32,
+    Down = ffi::tagVTFCubeMapFace_CUBEMAP_FACE_DOWN as u32,
+    SphereMap = ffi::tagVTFCubeMapFace_CUBEMAP_FACE_SPHERE_MAP as u32,
+}
+/// Mipmap reduction filters
 #[repr(i32)]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum MipmapFilter {
@@ -444,6 +541,7 @@ pub enum MipmapFilter {
     Kaiser = ffi::tagVTFMipmapFilter_MIPMAP_FILTER_KAISER,
 }
 
+/// Mipmap sharpen filters
 #[repr(i32)]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum SharpenFilter {
@@ -470,6 +568,16 @@ pub enum SharpenFilter {
 
 #[repr(i32)]
 #[derive(Debug, Clone, Copy, PartialEq)]
+pub enum DxtQuality {
+    Low = ffi::tagDXTQuality_DXT_QUALITY_LOW,
+    Medium = ffi::tagDXTQuality_DXT_QUALITY_MEDIUM,
+    High = ffi::tagDXTQuality_DXT_QUALITY_HIGH,
+    Highest = ffi::tagDXTQuality_DXT_QUALITY_HIGHEST,
+}
+
+/// Normal map creation kernel sizes
+#[repr(i32)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum KernelFilter {
     Filter4X = ffi::tagVTFKernelFilter_KERNEL_FILTER_4X,
     Filter3X3 = ffi::tagVTFKernelFilter_KERNEL_FILTER_3X3,
@@ -479,6 +587,7 @@ pub enum KernelFilter {
     FilterDuDv = ffi::tagVTFKernelFilter_KERNEL_FILTER_DUDV,
 }
 
+/// Normal map height conversion methods
 #[repr(i32)]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum HeightConversionMethod {
@@ -492,6 +601,7 @@ pub enum HeightConversionMethod {
     ColorSpace = ffi::tagVTFHeightConversionMethod_HEIGHT_CONVERSION_METHOD_COLORSPACE,
 }
 
+/// Normal map alpha channel handling
 #[repr(i32)]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum NormalAlphaResult {
@@ -501,6 +611,7 @@ pub enum NormalAlphaResult {
     White = ffi::tagVTFNormalAlphaResult_NORMAL_ALPHA_RESULT_WHITE,
 }
 
+/// Image resize methods
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ResizeMethod {
     NearestPower2,
@@ -511,6 +622,7 @@ pub enum ResizeMethod {
 
 ffi_enum! {
     #[repr(i32)]
+    #[doc = "Resource type identifiers"]
     #[derive(Debug, Clone, Copy, PartialEq)]
     pub enum ResourceType {
         LegacyLowResImage = ffi::tagVTFResourceEntryType_VTF_LEGACY_RSRC_LOW_RES_IMAGE,
@@ -523,6 +635,8 @@ ffi_enum! {
     }
 }
 
+/// A VTF file.
+/// Must be bound before it can be worked on.
 #[must_use]
 #[derive(Debug)]
 pub struct VtfFile<'a> {
@@ -532,6 +646,10 @@ pub struct VtfFile<'a> {
 }
 
 impl<'a> VtfFile<'a> {
+    /// Bind the VTF file to work on it. Only one VTF file can be bound at a time.
+    /// This is a limitation of the underlying library's C API.
+    /// Mutably borrows the [`VtfGuard`] obtained from library initialization to enforce this.
+    ///
     /// # Panics
     ///
     /// Panics if the binding fails. This should not happen.
@@ -549,6 +667,7 @@ impl<'a> VtfFile<'a> {
         }
     }
 
+    /// Compute how much memory a specified image needs in bytes.
     #[must_use]
     pub fn compute_image_size(
         width: u32,
@@ -560,11 +679,14 @@ impl<'a> VtfFile<'a> {
         unsafe { ffi::vlImageComputeImageSize(width, height, depth, mipmaps, format as i32) }
     }
 
+    /// Compute the number of mip levels needed for an image of given dimensions.
+    /// The number includes the original image, and counts mipmaps down to 1x1 pixels.
     #[must_use]
     pub fn compute_mipmap_count(width: u32, height: u32, depth: u32) -> u32 {
         unsafe { ffi::vlImageComputeMipmapCount(width, height, depth) }
     }
 
+    /// Compute the dimensions of a given mip level for an image of given dimensions.
     #[must_use]
     pub fn compute_mipmap_dimensions(
         width: u32,
@@ -589,6 +711,7 @@ impl<'a> VtfFile<'a> {
         (w, h, d)
     }
 
+    /// Compute how much memory a given mipmap level needs in bytes.
     #[must_use]
     pub fn compute_mipmap_size(
         width: u32,
@@ -598,6 +721,259 @@ impl<'a> VtfFile<'a> {
         format: ImageFormat,
     ) -> u32 {
         unsafe { ffi::vlImageComputeMipmapSize(width, height, depth, mipmap_level, format as i32) }
+    }
+
+    /// Convert an image stored in a given format to [`ImageFormat::Rgba8888`].
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err` if `source` has invalid length or if the conversion fails.
+    pub fn convert_image_to_rgba8888(
+        source: &[u8],
+        width: u32,
+        height: u32,
+        source_format: ImageFormat,
+    ) -> Result<Vec<u8>> {
+        let source_size = VtfFile::compute_image_size(width, height, 1, 1, source_format) as usize;
+        let target_size =
+            VtfFile::compute_image_size(width, height, 1, 1, ImageFormat::Rgba8888) as usize;
+        if source.len() < source_size {
+            return Err(Error::InvalidLength);
+        }
+        let mut buf = Vec::with_capacity(target_size);
+        unsafe {
+            ffi_try!(ffi::vlImageConvertToRGBA8888(
+                source.as_ptr() as *mut u8,
+                buf.as_mut_ptr(),
+                width,
+                height,
+                source_format as i32
+            ));
+            buf.set_len(target_size);
+        }
+        Ok(buf)
+    }
+
+    /// Convert an image stored in [`ImageFormat::Rgba8888`] to a given format.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err` if `source` has invalid length or if the conversion fails.
+    pub fn convert_image_from_rgba8888(
+        source: &[u8],
+        width: u32,
+        height: u32,
+        dest_format: ImageFormat,
+    ) -> Result<Vec<u8>> {
+        let source_size =
+            VtfFile::compute_image_size(width, height, 1, 1, ImageFormat::Rgba8888) as usize;
+        let target_size = VtfFile::compute_image_size(width, height, 1, 1, dest_format) as usize;
+        if source.len() < source_size {
+            return Err(Error::InvalidLength);
+        }
+        let mut buf = Vec::with_capacity(target_size);
+        unsafe {
+            ffi_try!(ffi::vlImageConvertFromRGBA8888(
+                source.as_ptr() as *mut u8,
+                buf.as_mut_ptr(),
+                width,
+                height,
+                dest_format as i32
+            ));
+            buf.set_len(target_size);
+        }
+        Ok(buf)
+    }
+
+    /// Convert between supported image formats.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err` if `source` has invalid length or if the conversion fails.
+    pub fn convert_image(
+        source: &[u8],
+        width: u32,
+        height: u32,
+        source_format: ImageFormat,
+        dest_format: ImageFormat,
+    ) -> Result<Vec<u8>> {
+        let source_size = VtfFile::compute_image_size(width, height, 1, 1, source_format) as usize;
+        let target_size = VtfFile::compute_image_size(width, height, 1, 1, dest_format) as usize;
+        if source.len() < source_size {
+            return Err(Error::InvalidLength);
+        }
+        let mut buf = Vec::with_capacity(target_size);
+        unsafe {
+            ffi_try!(ffi::vlImageConvert(
+                source.as_ptr() as *mut u8,
+                buf.as_mut_ptr(),
+                width,
+                height,
+                source_format as i32,
+                dest_format as i32
+            ));
+            buf.set_len(target_size);
+        }
+        Ok(buf)
+    }
+
+    /// Convert an image stored in [`ImageFormat::Rgba8888`] to a normal map.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err` if `source` has invalid length or if the conversion fails.
+    pub fn convert_image_to_normal_map(
+        source: &[u8],
+        width: u32,
+        height: u32,
+        settings: &NormalMapConversionSettings,
+    ) -> Result<Vec<u8>> {
+        let size = VtfFile::compute_image_size(width, height, 1, 1, ImageFormat::Rgba8888) as usize;
+        if source.len() < size {
+            return Err(Error::InvalidLength);
+        }
+        let mut buf = Vec::with_capacity(size);
+        unsafe {
+            ffi_try!(ffi::vlImageConvertToNormalMap(
+                source.as_ptr() as *mut u8,
+                buf.as_mut_ptr(),
+                width,
+                height,
+                settings.kernel_filter as i32,
+                settings.height_conversion_method as i32,
+                settings.normal_alpha_result as i32,
+                settings.minimum_z,
+                settings.scale,
+                ffi_bool(settings.wrap),
+                ffi_bool(settings.invert_x),
+                ffi_bool(settings.invert_y),
+            ));
+            buf.set_len(size);
+        }
+        Ok(buf)
+    }
+
+    /// Resize an image stored in [`ImageFormat::Rgba8888`] to the given dimensions.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err` if `source` has invalid length or if the resize fails.
+    pub fn resize_image(
+        source: &[u8],
+        source_width: u32,
+        source_height: u32,
+        target_width: u32,
+        target_height: u32,
+        resize_filter: MipmapFilter,
+        sharpen_filter: SharpenFilter,
+    ) -> Result<Vec<u8>> {
+        let source_size =
+            VtfFile::compute_image_size(source_width, source_height, 1, 1, ImageFormat::Rgba8888)
+                as usize;
+        let target_size =
+            VtfFile::compute_image_size(target_width, target_height, 1, 1, ImageFormat::Rgba8888)
+                as usize;
+        if source.len() < source_size {
+            return Err(Error::InvalidLength);
+        }
+        let mut buf = Vec::with_capacity(target_size);
+        unsafe {
+            ffi_try!(ffi::vlImageResize(
+                source.as_ptr() as *mut u8,
+                buf.as_mut_ptr(),
+                source_width,
+                source_height,
+                target_width,
+                target_height,
+                resize_filter as i32,
+                sharpen_filter as i32,
+            ));
+            buf.set_len(target_size);
+        }
+        Ok(buf)
+    }
+
+    /// Apply gamma correction to an image stored in [`ImageFormat::Rgba8888`].
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err` if `data` has invalid length.
+    pub fn correct_image_gamma(
+        data: &mut [u8],
+        width: u32,
+        height: u32,
+        gamma_correction: f32,
+    ) -> Result<()> {
+        let size = VtfFile::compute_image_size(width, height, 1, 1, ImageFormat::Rgba8888) as usize;
+        if data.len() < size {
+            return Err(Error::InvalidLength);
+        }
+        unsafe {
+            ffi::vlImageCorrectImageGamma(data.as_mut_ptr(), width, height, gamma_correction);
+        }
+        Ok(())
+    }
+
+    /// Compute the reflectivity of an image stored in [`ImageFormat::Rgba8888`].
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err` if `data` has invalid length.
+    pub fn compute_image_reflectivity(
+        data: &[u8],
+        width: u32,
+        height: u32,
+    ) -> Result<(f32, f32, f32)> {
+        let size = VtfFile::compute_image_size(width, height, 1, 1, ImageFormat::Rgba8888) as usize;
+        if data.len() < size {
+            return Err(Error::InvalidLength);
+        }
+        let mut x = 0.0;
+        let mut y = 0.0;
+        let mut z = 0.0;
+        unsafe {
+            ffi::vlImageComputeImageReflectivity(
+                data.as_ptr() as *mut u8,
+                width,
+                height,
+                &mut x,
+                &mut y,
+                &mut z,
+            );
+        }
+        Ok((x, y, z))
+    }
+
+    /// Flip an image stored in [`ImageFormat::Rgba8888`] vertically along its X-axis.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err` if `data` has invalid length.
+    pub fn flip_image(data: &mut [u8], width: u32, height: u32) -> Result<()> {
+        let size = VtfFile::compute_image_size(width, height, 1, 1, ImageFormat::Rgba8888) as usize;
+        if data.len() < size {
+            return Err(Error::InvalidLength);
+        }
+        unsafe {
+            ffi::vlImageFlipImage(data.as_mut_ptr(), width, height);
+        }
+        Ok(())
+    }
+
+    /// Flip an image stored in [`ImageFormat::Rgba8888`] horizontally along its Y-axis.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err` if `data` has invalid length.
+    pub fn mirror_image(data: &mut [u8], width: u32, height: u32) -> Result<()> {
+        let size = VtfFile::compute_image_size(width, height, 1, 1, ImageFormat::Rgba8888) as usize;
+        if data.len() < size {
+            return Err(Error::InvalidLength);
+        }
+        unsafe {
+            ffi::vlImageMirrorImage(data.as_mut_ptr(), width, height);
+        }
+        Ok(())
     }
 }
 
@@ -609,6 +985,10 @@ impl<'a> Drop for VtfFile<'a> {
     }
 }
 
+/// A bound vtf file ready for manipulation.
+/// Only one vtf file can be bound at a time.
+/// A bound vtf file can be either manually unbound,
+/// or automatically when it is dropped.
 #[must_use]
 pub struct BoundVtfFile<'a, 'b> {
     // mutable borrow ensures only one vtf file is bound at a time
@@ -617,21 +997,23 @@ pub struct BoundVtfFile<'a, 'b> {
 }
 
 impl<'a, 'b> BoundVtfFile<'a, 'b> {
+    /// Unbind the image.
+    /// Allows other images to be bound.
     pub fn unbind(self) -> VtfFile<'a> {
         self.vtf_file
     }
 
     /// Build a new empty image.
-    pub fn build_empty(&mut self, width: u32, height: u32) -> EmptyImageBuilder {
+    pub fn new_empty(&mut self, width: u32, height: u32) -> EmptyImageBuilder {
         EmptyImageBuilder::new(width, height)
     }
 
-    /// Load an image from existing RGBA8888 data.
+    /// Load an image from existing [`ImageFormat::Rgba8888`] data.
     pub fn from_rgba8888(&mut self, width: u32, height: u32) -> Rgba8888ImageBuilder {
         Rgba8888ImageBuilder::new(width, height)
     }
 
-    /// Destroy the contained image
+    /// Destroy the contained image, if any.
     pub fn destroy(&mut self) {
         unsafe {
             ffi::vlImageDestroy();
@@ -671,7 +1053,7 @@ impl<'a, 'b> BoundVtfFile<'a, 'b> {
         Ok(())
     }
 
-    /// Save a VTF image into `buffer`. Returns bytes written.
+    /// Save the image into `buffer`. Returns bytes written.
     ///
     /// # Errors
     ///
@@ -690,7 +1072,7 @@ impl<'a, 'b> BoundVtfFile<'a, 'b> {
         Ok(written as usize)
     }
 
-    /// Save a VTF image into a [`Vec`].
+    /// Save the image into a [`Vec`].
     ///
     /// # Errors
     ///
@@ -713,54 +1095,87 @@ impl<'a, 'b> BoundVtfFile<'a, 'b> {
 
     ffi_getters!(
         #[allow(clippy::cast_possible_truncation)]
+        #[doc = "Check if image data has been loaded."]
+        #[doc = "Returns false if a VTF file was loaded with header only."]
         pub fn has_image(&self) -> bool => ffi::vlImageGetHasImage() as u8 == ffi::vlTrue,
 
+        #[doc = "Returns the VTF file major version number."]
         pub fn major_version(&self) -> u32 => ffi::vlImageGetMajorVersion(),
+        #[doc = "Returns the VTF file minor version number."]
         pub fn minor_version(&self) -> u32 => ffi::vlImageGetMinorVersion(),
+        #[doc = "Returns the VTF file size in bytes."]
         pub fn size(&self) -> usize => ffi::vlImageGetSize() as usize,
 
+        #[doc = "Returns the width of the image in pixels."]
         pub fn width(&self) -> u32 => ffi::vlImageGetWidth(),
+        #[doc = "Returns the height of the image in pixels."]
         pub fn height(&self) -> u32 => ffi::vlImageGetHeight(),
+        #[doc = "Returns the depth of the image in pixels."]
         pub fn depth(&self) -> u32 => ffi::vlImageGetDepth(),
 
+        #[doc = "Returns the frame count of the image."]
         pub fn frame_count(&self) -> u32 => ffi::vlImageGetFrameCount(),
+        #[doc = "Returns the face count of the image."]
         pub fn face_count(&self) -> u32 => ffi::vlImageGetFaceCount(),
+        #[doc = "Returns the number of mip levels in the image."]
         pub fn mipmap_count(&self) -> u32 => ffi::vlImageGetMipmapCount(),
 
+        #[doc = "Returns the start frame of the image."]
         pub fn start_frame(&self) -> u32 => ffi::vlImageGetStartFrame(),
 
+        #[doc = "Returns the image flags."]
         pub fn flags(&self) -> ImageFlags => ImageFlags::from_bits_truncate(ffi::vlImageGetFlags()),
 
+        #[doc = "Check if the given flag is set."]
         #[allow(clippy::cast_possible_wrap)]
         pub fn flag(&self, flag: ImageFlags) -> bool => ffi::vlImageGetFlag(flag.bits as i32) == ffi::vlTrue,
 
+        #[doc = "Returns the bump scale value."]
         pub fn bumpmap_scale(&self) -> f32 => ffi::vlImageGetBumpmapScale(),
 
+        #[doc = "Returns the format of the image."]
+        #[doc = "Returns `None` if the format is unknown or if an image is not loaded."]
         pub fn format(&self) -> Option<ImageFormat> => ImageFormat::from_ffi(ffi::vlImageGetFormat()),
 
+        #[doc = "Check whether the current image has a thumbnail."]
         pub fn has_thumbnail(&self) -> bool => ffi::vlImageGetHasThumbnail() == ffi::vlTrue,
+        #[doc = "Returns the width the thumbnail in pixels."]
         pub fn thumbnail_width(&self) -> u32 => ffi::vlImageGetThumbnailWidth(),
+        #[doc = "Returns the height the thumbnail in pixels."]
         pub fn thumbnail_height(&self) -> u32 => ffi::vlImageGetThumbnailHeight(),
+        #[doc = "Returns the format of the thumbnail."]
+        #[doc = "Returns `None` if the format is unknown or if there is no thumbnail."]
         pub fn thumbnail_format(&self) -> Option<ImageFormat> => ImageFormat::from_ffi(ffi::vlImageGetThumbnailFormat()),
 
+        #[doc = "Check whether the current VTF version supports resources."]
         pub fn supports_resource(&self) -> bool => ffi::vlImageGetSupportsResources() == ffi::vlTrue,
+        #[doc = "Returns the number of resource contained within the VTF file."]
         pub fn resource_count(&self) -> u32 => ffi::vlImageGetResourceCount(),
 
         #[allow(clippy::cast_possible_wrap)]
+        #[doc = "Returns the type of the resource at the given index."]
+        #[doc = "Returns `None` if the given index doesn't exist or if resources are not supported."]
         pub fn resource_type(&self, index: u32) -> Option<ResourceType> => ResourceType::from_ffi(ffi::vlImageGetResourceType(index) as i32),
 
+        #[doc = "Check whether the resource of the given type exists."]
         pub fn has_resource(&self, resource: ResourceType) -> bool => ffi::vlImageGetHasResource(resource as u32) == ffi::vlTrue
     );
 
     ffi_setters! {
+        #[doc = "Sets the start frame of the image."]
         pub fn set_start_frame(&mut self, start_frame: u32) => ffi::vlImageSetStartFrame(start_frame),
+        #[doc = "Sets the flags of the image."]
         pub fn set_flags(&mut self, flags: ImageFlags) => ffi::vlImageSetFlags(flags.bits),
         #[allow(clippy::cast_possible_wrap)]
+        #[doc = "Sets the state of a specific flag in the image"]
         pub fn set_flag(&mut self, flag: ImageFlags, state: bool) => ffi::vlImageSetFlag(flag.bits as i32, ffi_bool(state)),
+        #[doc = "Sets the bump scale value."]
         pub fn set_bumpmap_scale(&mut self, scale: f32) => ffi::vlImageSetBumpmapScale(scale),
+        #[doc = "Sets the reflectivity values of the image."]
         pub fn set_reflectivity(&mut self, x: f32, y: f32, z: f32) => ffi::vlImageSetReflectivity(x, y, z)
     }
 
+    /// Gets the reflectivity values of the image.
     #[must_use]
     pub fn reflectivity(&self) -> (f32, f32, f32) {
         let mut x = 0.0;
@@ -794,6 +1209,9 @@ impl<'a, 'b> BoundVtfFile<'a, 'b> {
         true
     }
 
+    /// Get a reference to the image data of a specific image.
+    /// The data is in the format returned by `format()`.
+    /// Returns `None` if the given values don't exist.
     #[must_use]
     pub fn data(&self, frame: u32, face: u32, slice: u32, mipmap_level: u32) -> Option<&[u8]> {
         if !self.verify_data_invariants(frame, face, slice, mipmap_level) {
@@ -802,6 +1220,9 @@ impl<'a, 'b> BoundVtfFile<'a, 'b> {
         return unsafe { self.data_unchecked(frame, face, slice, mipmap_level) };
     }
 
+    /// Get an unchecked reference to the image data of the specified image.
+    /// The data is in the format returned by `format()`.
+    ///
     /// # Safety
     ///
     /// If any parameters are invalid for the current image, undefined behaviour results.
@@ -821,10 +1242,13 @@ impl<'a, 'b> BoundVtfFile<'a, 'b> {
         Some(slice::from_raw_parts(data, data_len))
     }
 
+    /// Sets the image data of the specified image.
+    /// The data must be in the format returned by `format()`.
+    ///
     /// # Errors
     ///
     /// Returns `Err` if the data length is not correct,
-    /// or if the parameters are not valid for the current image.
+    /// or if the parameters are not valid.
     pub fn set_data(
         &mut self,
         frame: u32,
@@ -844,9 +1268,12 @@ impl<'a, 'b> BoundVtfFile<'a, 'b> {
         Ok(())
     }
 
+    /// Sets the image data of the specified image.
+    /// The data must be in the format returned by `format()`.
+    ///
     /// # Safety
     ///
-    /// If any parameters are invalid for the current image,
+    /// If any parameters are invalid,
     /// or if data length is invalid, undefined behaviour results.
     pub unsafe fn set_data_unchecked(
         &mut self,
@@ -867,6 +1294,9 @@ impl<'a, 'b> BoundVtfFile<'a, 'b> {
         })
     }
 
+    /// Get a reference to the thumbnail data.
+    /// The data is in the format returned by `thumbnail_format()`.
+    /// Returns `None` if there is no thumbnail data.
     #[must_use]
     pub fn thumbnail_data(&self) -> Option<&[u8]> {
         let data_len = self.thumbnail_data_len()?;
@@ -879,6 +1309,9 @@ impl<'a, 'b> BoundVtfFile<'a, 'b> {
         }
     }
 
+    /// Sets the thumbnail image data.
+    /// The data must be in the format returned by `thumbnail_format()`.
+    ///
     /// # Errors
     ///
     /// Returns `Err` if the data length is not correct.
@@ -893,6 +1326,8 @@ impl<'a, 'b> BoundVtfFile<'a, 'b> {
         Ok(())
     }
 
+    /// Get a reference to the given resource data.
+    ///
     /// # Errors
     ///
     /// Returns `Err` if the resource data cannot be get.
@@ -904,6 +1339,10 @@ impl<'a, 'b> BoundVtfFile<'a, 'b> {
         }
     }
 
+    /// Sets the given resource data.
+    /// This creates the resource if it doesn't exist.
+    /// Passing an empty slice deletes the resource.
+    ///
     /// # Errors
     ///
     /// Returns `Err` if the resource data cannot be set.
@@ -919,10 +1358,12 @@ impl<'a, 'b> BoundVtfFile<'a, 'b> {
         Ok(())
     }
 
+    /// Generates mipmaps for the given face and frame.
+    ///
     /// # Errors
     ///
     /// Returns `Err` if the mipmap generation fails,
-    /// or if the parameters are incorrect for the current image.
+    /// or if the parameters are invalid.
     pub fn generate_mipmaps(
         &mut self,
         face: u32,
@@ -947,6 +1388,8 @@ impl<'a, 'b> BoundVtfFile<'a, 'b> {
         Ok(())
     }
 
+    /// Generates mipmaps for all faces and frames.
+    ///
     /// # Errors
     ///
     /// Returns `Err` if the mipmap generation fails.
@@ -964,6 +1407,8 @@ impl<'a, 'b> BoundVtfFile<'a, 'b> {
         Ok(())
     }
 
+    /// Generates the thumbnail.
+    ///
     /// # Errors
     ///
     /// Returns `Err` if the thumbnail generation fails.
@@ -974,6 +1419,8 @@ impl<'a, 'b> BoundVtfFile<'a, 'b> {
         Ok(())
     }
 
+    /// Converts the image to a normal map using the data in the given frame.
+    ///
     /// # Errors
     ///
     /// Returns `Err` if the normal map generation fails,
@@ -999,6 +1446,8 @@ impl<'a, 'b> BoundVtfFile<'a, 'b> {
         Ok(())
     }
 
+    /// Converts the image to a normal map using mip level 0 as the source.
+    ///
     /// # Errors
     ///
     /// Returns `Err` if the normal map generation fails.
@@ -1018,6 +1467,8 @@ impl<'a, 'b> BoundVtfFile<'a, 'b> {
         Ok(())
     }
 
+    /// Generates a shere map using the 6 cubemap faces of the image.
+    ///
     /// # Errors
     ///
     /// Returns `Err` if the sphere map generation fails.
@@ -1028,6 +1479,8 @@ impl<'a, 'b> BoundVtfFile<'a, 'b> {
         Ok(())
     }
 
+    /// Computes and sets the reflectivity values of the image based on pixels' color averages.
+    ///
     /// # Errors
     ///
     /// Returns `Err` if the reflectivity can't be computed.
@@ -1039,6 +1492,7 @@ impl<'a, 'b> BoundVtfFile<'a, 'b> {
     }
 }
 
+/// A builder for a new empty image.
 #[must_use]
 pub struct EmptyImageBuilder<'a, 'b, 'c> {
     marker: PhantomData<&'c mut BoundVtfFile<'a, 'b>>,
@@ -1070,16 +1524,23 @@ impl<'a, 'b, 'c> EmptyImageBuilder<'a, 'b, 'c> {
     }
 
     builder! {
+        #[doc = "Sets the number of frames in the image."]
         pub fn frames(mut self, frames: u32) -> Self => self.frames = frames,
+        #[doc = "Sets the number of faces in the image."]
         pub fn faces(mut self, faces: u32) -> Self => self.faces = faces,
+        #[doc = "Sets the number of z slices in the image."]
         pub fn slices(mut self, slices: u32) -> Self => self.slices = slices,
+        #[doc = "Sets the format of the image."]
         pub fn format(mut self, format: ImageFormat) -> Self => self.format = format,
+        #[doc = "Sets whether the image will contain a thumbnail."]
         pub fn thumbnail(mut self, thumbnail: bool) -> Self => self.thumbnail = thumbnail,
+        #[doc = "Sets whether the image will contain mipmaps."]
         pub fn mipmaps(mut self, mipmaps: bool) -> Self => self.mipmaps = mipmaps,
+        #[doc = "Sets whether the image data will be zeroed on creation."]
         pub fn null_data(mut self, null_data: bool) -> Self => self.null_data = null_data
     }
 
-    /// Create the image
+    /// Create the empty image.
     ///
     /// # Errors
     ///
@@ -1102,6 +1563,7 @@ impl<'a, 'b, 'c> EmptyImageBuilder<'a, 'b, 'c> {
     }
 }
 
+/// A builder for an image from existing RGBA8888 data.
 #[must_use]
 pub struct Rgba8888ImageBuilder<'a, 'b, 'c> {
     marker: PhantomData<&'c mut BoundVtfFile<'a, 'b>>,
@@ -1126,20 +1588,35 @@ impl<'a, 'b, 'c> Rgba8888ImageBuilder<'a, 'b, 'c> {
     }
 
     builder! {
+        #[doc = "Sets the version of the created image."]
         pub fn version(mut self, major: u32, minor: u32) -> Self => self.options.uiVersion = [major, minor],
+        #[doc = "Sets the format of the created image."]
         pub fn format(mut self, format: ImageFormat) -> Self => self.options.ImageFormat = format as i32,
+        #[doc = "Sets the flags of the created image."]
         pub fn flags(mut self, flags: ImageFlags) -> Self => self.options.uiFlags = flags.bits,
+        #[doc = "Enables the given flag in the created image."]
         pub fn with_flag(mut self, flag: ImageFlags) -> Self => self.options.uiFlags |= flag.bits,
+        #[doc = "Disables the given flag in the created image."]
         pub fn without_flag(mut self, flag: ImageFlags) -> Self => self.options.uiFlags &= !flag.bits,
+        #[doc = "Sets the start frame of the created image."]
         pub fn start_frame(mut self, frame: u32) -> Self => self.options.uiStartFrame = frame,
+        #[doc = "Sets the bump scale of the created image."]
         pub fn bump_scale(mut self, scale: f32) -> Self => self.options.sBumpScale = scale,
+        #[doc = "Sets the reflectivity values of the created image."]
         pub fn reflectivity(mut self, reflectivity: [f32; 3]) -> Self => self.options.sReflectivity = reflectivity,
+        #[doc = "Sets whether to generate mipmaps."]
         pub fn generate_mipmaps(mut self, mipmaps: bool) -> Self => self.options.bMipmaps = ffi_bool(mipmaps),
+        #[doc = "Sets the mipmap resize filter."]
         pub fn mipmap_filter(mut self, filter: MipmapFilter) -> Self => self.options.MipmapFilter = filter as i32,
+        #[doc = "Sets the mipmap sharpen filter"]
         pub fn mipmap_sharpen_filter(mut self, filter: SharpenFilter) -> Self => self.options.MipmapSharpenFilter = filter as i32,
+        #[doc = "Sets whether to generate a thumbnail."]
         pub fn generate_thumbnail(mut self, thumbnail: bool) -> Self => self.options.bThumbnail = ffi_bool(thumbnail),
+        #[doc = "Sets whether to compute the reflectivity of the image."]
         pub fn compute_reflectivity(mut self, reflectivity: bool) -> Self => self.options.bReflectivity = ffi_bool(reflectivity),
+        #[doc = "Sets whether to resize the input image."]
         pub fn resize(mut self, resize: bool) -> Self => self.options.bResize = ffi_bool(resize),
+        #[doc = "Sets the resize method."]
         pub fn resize_method(mut self, method: ResizeMethod) -> Self => match method {
             ResizeMethod::NearestPower2 => self.options.ResizeMethod = ffi::tagVTFResizeMethod_RESIZE_NEAREST_POWER2,
             ResizeMethod::BiggestPower2 => self.options.ResizeMethod = ffi::tagVTFResizeMethod_RESIZE_BIGGEST_POWER2,
@@ -1150,29 +1627,39 @@ impl<'a, 'b, 'c> Rgba8888ImageBuilder<'a, 'b, 'c> {
                 self.options.uiResizeHeight = height;
             }
         },
+        #[doc = "Sets the resize filter."]
         pub fn resize_filter(mut self, filter: MipmapFilter) -> Self => self.options.ResizeFilter = filter as i32,
+        #[doc = "Sets the resize sharpen filter."]
         pub fn resize_sharpen_filter(mut self, filter: MipmapFilter) -> Self => self.options.ResizeSharpenFilter = filter as i32,
+        #[doc = "Sets whether to clamp the resize size."]
         pub fn resize_clamp(mut self, clamp: bool) -> Self => self.options.bResizeClamp = ffi_bool(clamp),
+        #[doc = "Sets the dimensions to clamp the resize to."]
         pub fn resize_clamp_dimensions(mut self, width: u32, heigth: u32) -> Self => {
             self.options.uiResizeClampWidth = width;
             self.options.uiResizeClampHeight = heigth;
         },
-        pub fn gamma_correction(mut self, correction: bool) -> Self => self.options.bGammaCorrection = ffi_bool(correction),
-        pub fn gamma_correction_amount(mut self, amount: f32) -> Self => self.options.sGammaCorrection = amount,
-        pub fn normal_map(mut self, normal_map: bool) -> Self => self.options.bNormalMap = ffi_bool(normal_map),
-        pub fn kernel_filter(mut self, filter: KernelFilter) -> Self => self.options.KernelFilter = filter as i32,
-        pub fn height_conversion_method(mut self, method: HeightConversionMethod) -> Self => self.options.HeightConversionMethod = method as i32,
-        pub fn normal_alpha_result(mut self, result: NormalAlphaResult) -> Self => self.options.NormalAlphaResult = result as i32,
-        pub fn normal_minimum_z(mut self, min: u8) -> Self => self.options.bNormalMinimumZ = min,
-        pub fn normal_scale(mut self, scale: f32) -> Self => self.options.sNormalScale = scale,
-        pub fn normal_wrap(mut self, wrap: bool) -> Self => self.options.bNormalWrap = ffi_bool(wrap),
-        pub fn normal_invert_x(mut self, invert: bool) -> Self => self.options.bNormalInvertX = ffi_bool(invert),
-        pub fn normal_invert_y(mut self, invert: bool) -> Self => self.options.bNormalInvertY = ffi_bool(invert),
-        pub fn normal_invert_z(mut self, invert: bool) -> Self => self.options.bNormalInvertZ = ffi_bool(invert),
+        #[doc = "Apply gamma correction to the input image."]
+        pub fn gamma_correct(mut self, amount: f32) -> Self => {
+            self.options.bGammaCorrection = ffi::vlTrue;
+            self.options.sGammaCorrection = amount;
+        },
+        #[doc = "Convert the input image into a normal map."]
+        pub fn normal_map(mut self, settings: NormalMapConversionSettings) -> Self => {
+            self.options.KernelFilter = settings.kernel_filter as i32;
+            self.options.HeightConversionMethod = settings.height_conversion_method as i32;
+            self.options.NormalAlphaResult = settings.normal_alpha_result as i32;
+            self.options.bNormalMinimumZ = settings.minimum_z;
+            self.options.sNormalScale = settings.scale;
+            self.options.bNormalWrap = ffi_bool(settings.wrap);
+            self.options.bNormalInvertX = ffi_bool(settings.invert_x);
+            self.options.bNormalInvertY = ffi_bool(settings.invert_y);
+        },
+        #[doc = "Sets whether to generate a sphere map for six-faced cubemap images."]
         pub fn sphere_map(mut self, sphere_map: bool) -> Self => self.options.bSphereMap = ffi_bool(sphere_map)
     }
 
-    /// Create a single frame from `data`.
+    /// Create a single frame image from `data`.
+    /// Data needs to be `mut` because some creation options are applied in place.
     ///
     /// # Errors
     ///
@@ -1196,6 +1683,7 @@ impl<'a, 'b, 'c> Rgba8888ImageBuilder<'a, 'b, 'c> {
     }
 
     /// Create a multi frame or cubemap image from `data`.
+    /// Data needs to be `mut` because some creation options are applied in place.
     ///
     /// # Errors
     ///
@@ -1234,6 +1722,60 @@ impl<'a, 'b, 'c> Rgba8888ImageBuilder<'a, 'b, 'c> {
     }
 }
 
+/// Settings for normal map generation.
+#[must_use]
+#[derive(Debug, Clone, PartialEq)]
+pub struct NormalMapConversionSettings {
+    kernel_filter: KernelFilter,
+    height_conversion_method: HeightConversionMethod,
+    normal_alpha_result: NormalAlphaResult,
+    minimum_z: u8,
+    scale: f32,
+    wrap: bool,
+    invert_x: bool,
+    invert_y: bool,
+}
+
+impl NormalMapConversionSettings {
+    pub fn new() -> Self {
+        Self {
+            kernel_filter: KernelFilter::Filter3X3,
+            height_conversion_method: HeightConversionMethod::AverageRgb,
+            normal_alpha_result: NormalAlphaResult::White,
+            minimum_z: 0,
+            scale: 2.0,
+            wrap: false,
+            invert_x: false,
+            invert_y: false,
+        }
+    }
+
+    builder! {
+        #[doc = "Sets the normal map generation kernel."]
+        pub fn kernel_filter(mut self, filter: KernelFilter) -> Self => self.kernel_filter = filter,
+        #[doc = "Sets the method of determining height from input image."]
+        pub fn height_conversion_method(mut self, method: HeightConversionMethod) -> Self => self.height_conversion_method = method,
+        #[doc = "Sets the output image alpha channel handling."]
+        pub fn alpha_result(mut self, result: NormalAlphaResult) -> Self => self.normal_alpha_result = result,
+        #[doc = "Sets the minimum normal Z value."]
+        pub fn minimum_z(mut self, min: u8) -> Self => self.minimum_z = min,
+        #[doc = "Sets the normal map scale."]
+        pub fn scale(mut self, scale: f32) -> Self => self.scale = scale,
+        #[doc = "Sets whether to wrap the normal map."]
+        pub fn wrap(mut self, wrap: bool) -> Self => self.wrap = wrap,
+        #[doc = "Sets whether to invert the normal X component."]
+        pub fn invert_x(mut self, invert: bool) -> Self => self.invert_x = invert,
+        #[doc = "Sets whether to invert the normal Y component."]
+        pub fn invert_y(mut self, invert: bool) -> Self => self.invert_y = invert
+    }
+}
+
+impl Default for NormalMapConversionSettings {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1241,14 +1783,14 @@ mod tests {
     #[test]
     fn initialization() {
         assert_eq!(UNINIT_COUNTER.load(Ordering::Acquire), 0);
-        let (vtflib, guard) = VtfLib::new().unwrap();
-        assert!(VtfLib::new().is_none());
+        let (vtflib, guard) = VtfLib::initialize().unwrap();
+        assert!(VtfLib::initialize().is_none());
         assert_eq!(UNINIT_COUNTER.load(Ordering::Acquire), 2);
         drop(vtflib);
-        assert!(VtfLib::new().is_none());
+        assert!(VtfLib::initialize().is_none());
         assert_eq!(UNINIT_COUNTER.load(Ordering::Acquire), 1);
         drop(guard);
         assert_eq!(UNINIT_COUNTER.load(Ordering::Acquire), 0);
-        assert!(VtfLib::new().is_some());
+        assert!(VtfLib::initialize().is_some());
     }
 }

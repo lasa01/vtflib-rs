@@ -4,19 +4,19 @@ use vtflib::{ImageFormat, VtfLib};
 #[test]
 #[serial]
 fn vtf_create_empty() {
-    let (vtflib, mut guard) = VtfLib::new().unwrap();
+    let (vtflib, mut guard) = VtfLib::initialize().unwrap();
 
     let vtf = vtflib.new_vtf_file();
 
     let mut vtf = vtf.bind(&mut guard);
-    vtf.build_empty(512, 512).null_data(true).create().unwrap();
+    vtf.new_empty(512, 512).null_data(true).create().unwrap();
     assert!(vtf.has_image());
 }
 
 #[test]
 #[serial]
 fn vtf_load_save() {
-    let (vtflib, mut guard) = VtfLib::new().unwrap();
+    let (vtflib, mut guard) = VtfLib::initialize().unwrap();
 
     let vtf = vtflib.new_vtf_file();
 
@@ -37,13 +37,13 @@ fn vtf_load_save() {
 #[test]
 #[serial]
 fn vtf_two_vtfs() {
-    let (vtflib, mut guard) = VtfLib::new().unwrap();
+    let (vtflib, mut guard) = VtfLib::initialize().unwrap();
 
     let vtf1 = vtflib.new_vtf_file();
     let vtf2 = vtflib.new_vtf_file();
 
     let mut vtf1 = vtf1.bind(&mut guard);
-    vtf1.build_empty(512, 512).null_data(true).create().unwrap();
+    vtf1.new_empty(512, 512).null_data(true).create().unwrap();
     assert!(vtf1.has_image());
 
     let mut vtf2 = vtf2.bind(&mut guard);
