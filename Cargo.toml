@@ -1,7 +1,7 @@
 [package]
 name = "vtflib"
 description = "Safe wrapper for VTFLib."
-version = "0.1.0"
+version = "0.1.1"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/lasa01/vtflib-rs/"
 readme = "README.md"
@@ -17,7 +17,7 @@ static = ["vtflib-sys/static"]
 
 [dependencies]
 bitflags = "1.2.1"
-vtflib-sys = "0.1.0"
+vtflib-sys = "0.1.1"
 
 [dev-dependencies]
 serial_test = "0.5.1"
