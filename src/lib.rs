@@ -16,7 +16,10 @@ use bitflags::bitflags;
 use vtflib_sys as ffi;
 
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub enum Error {
+    /// Image is not loaded or only the header was loaded.
+    ImageNotLoaded,
     /// Provided image data buffer was too short to contain an image
     /// with the specified width, height and format.
     InvalidLength,
@@ -35,6 +38,7 @@ pub enum Error {
 impl Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Error::ImageNotLoaded => f.write_str("image is not loaded"),
             Error::InvalidLength => {
                 f.write_str("image data has invalid length for the specified size")
             }
@@ -1211,9 +1215,12 @@ impl<'a, 'b> BoundVtfFile<'a, 'b> {
 
     /// Get a reference to the image data of a specific image.
     /// The data is in the format returned by `format()`.
-    /// Returns `None` if the given values don't exist.
+    /// Returns `None` if the specified data doesn't exist or if an image is not loaded.
     #[must_use]
     pub fn data(&self, frame: u32, face: u32, slice: u32, mipmap_level: u32) -> Option<&[u8]> {
+        if !self.has_image() {
+            return None;
+        }
         if !self.verify_data_invariants(frame, face, slice, mipmap_level) {
             return None;
         }
@@ -1247,8 +1254,8 @@ impl<'a, 'b> BoundVtfFile<'a, 'b> {
     ///
     /// # Errors
     ///
-    /// Returns `Err` if the data length is not correct,
-    /// or if the parameters are not valid.
+    /// Returns `Err` if the data length is not correct, if the format is invalid,
+    /// if the parameters are not valid or if an image is not loaded.
     pub fn set_data(
         &mut self,
         frame: u32,
@@ -1257,12 +1264,15 @@ impl<'a, 'b> BoundVtfFile<'a, 'b> {
         mipmap_level: u32,
         data: &[u8],
     ) -> Result<()> {
-        let data_len = self.data_len(mipmap_level).ok_or(Error::InvalidFormat)?;
-        if data.len() < data_len {
-            return Err(Error::InvalidLength);
+        if !self.has_image() {
+            return Err(Error::ImageNotLoaded);
         }
         if !self.verify_data_invariants(frame, face, slice, mipmap_level) {
             return Err(Error::InvalidParameters);
+        }
+        let data_len = self.data_len(mipmap_level).ok_or(Error::InvalidFormat)?;
+        if data.len() < data_len {
+            return Err(Error::InvalidLength);
         }
         unsafe { self.set_data_unchecked(frame, face, slice, mipmap_level, data) }
         Ok(())
@@ -1296,9 +1306,12 @@ impl<'a, 'b> BoundVtfFile<'a, 'b> {
 
     /// Get a reference to the thumbnail data.
     /// The data is in the format returned by `thumbnail_format()`.
-    /// Returns `None` if there is no thumbnail data.
+    /// Returns `None` if there is no thumbnail data or if an image is not loaded.
     #[must_use]
     pub fn thumbnail_data(&self) -> Option<&[u8]> {
+        if !self.has_image() {
+            return None;
+        }
         let data_len = self.thumbnail_data_len()?;
         unsafe {
             let data = ffi::vlImageGetThumbnailData();
@@ -1314,8 +1327,11 @@ impl<'a, 'b> BoundVtfFile<'a, 'b> {
     ///
     /// # Errors
     ///
-    /// Returns `Err` if the data length is not correct.
+    /// Returns `Err` if the data length is not correct, if the format is invalid or if an image is not loaded.
     pub fn set_thumbnail_data(&mut self, data: &[u8]) -> Result<()> {
+        if !self.has_image() {
+            return Err(Error::ImageNotLoaded);
+        }
         let data_len = self.thumbnail_data_len().ok_or(Error::InvalidFormat)?;
         if data.len() < data_len {
             return Err(Error::InvalidLength);
@@ -1330,8 +1346,11 @@ impl<'a, 'b> BoundVtfFile<'a, 'b> {
     ///
     /// # Errors
     ///
-    /// Returns `Err` if the resource data cannot be get.
+    /// Returns `Err` if the resource data cannot be get or if an image is not loaded.
     pub fn resource_data(&self, resource: ResourceType) -> Result<&[u8]> {
+        if !self.has_image() {
+            return Err(Error::ImageNotLoaded);
+        }
         let mut data_len = 0;
         unsafe {
             let data = ffi_result(ffi::vlImageGetResourceData(resource as u32, &mut data_len))?;
@@ -1345,8 +1364,11 @@ impl<'a, 'b> BoundVtfFile<'a, 'b> {
     ///
     /// # Errors
     ///
-    /// Returns `Err` if the resource data cannot be set.
+    /// Returns `Err` if the resource data cannot be set or if an image is not loaded.
     pub fn set_resource_data(&mut self, resource: ResourceType, data: &[u8]) -> Result<()> {
+        if !self.has_image() {
+            return Err(Error::ImageNotLoaded);
+        }
         let len = data.len().try_into().map_err(|_| Error::LengthOverflow)?;
         unsafe {
             ffi_result(ffi::vlImageSetResourceData(
