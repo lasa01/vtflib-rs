@@ -15,7 +15,7 @@ use std::{
 use bitflags::bitflags;
 use vtflib_sys as ffi;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[non_exhaustive]
 pub enum Error {
     /// Image is not loaded or only the header was loaded.
