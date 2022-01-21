@@ -304,7 +304,7 @@ impl VtfLib {
 
 impl Drop for VtfLib {
     fn drop(&mut self) {
-        uninit_decrement()
+        uninit_decrement();
     }
 }
 
@@ -316,7 +316,7 @@ pub struct VtfGuard(PhantomData<*const ()>);
 
 impl Drop for VtfGuard {
     fn drop(&mut self) {
-        uninit_decrement()
+        uninit_decrement();
     }
 }
 
